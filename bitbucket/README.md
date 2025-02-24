@@ -1,0 +1,1 @@
+**This file should be called bitbucket-pipelines on your bitbucket repo to be triggered**

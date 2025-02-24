@@ -1,0 +1,36 @@
+name: Dev-Done Pipeline
+
+on:
+  push:
+    branches:
+      - dev-done
+  workflow_dispatch:
+
+jobs:
+  trigger_dev_staging_api:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare API Payload
+        run: |
+          PAYLOAD=$(jq -n --arg repo "${{ github.repository }}" \
+                          --arg branch "${{ github.ref_name }}" \
+                          --arg commit "${{ github.sha }}" \
+                          --arg trigger_type "$(if [[ "${{ github.event_name }}" == "pull_request" ]]; then echo "pull_request"; else echo "push"; fi)" \
+                          --arg pr_id "${{ github.event.pull_request.number }}" \
+                          '{source_repository: $repo, destination_branch: $branch, commit_hash: $commit, trigger_type: $trigger_type, pr_id: ($pr_id // null)}')
+          echo "PAYLOAD=$PAYLOAD" >> $GITHUB_ENV
+
+      - name: Send to DEV API Gateway
+        run: |
+          curl -X POST -H "Content-Type: application/json" -H "x-api-key: ${{ secrets.DEV_API_KEY }}" -d "$PAYLOAD" "${{ secrets.DEV_API_GATEWAY_URL }}/pr-merged"
+
+      - name: Send to PROD API Gateway
+        run: |
+          curl -X POST -H "Content-Type: application/json" -H "x-api-key: ${{ secrets.PROD_API_KEY }}" -d "$PAYLOAD" "${{ secrets.PROD_API_GATEWAY_URL }}/pr-merged"
+
+  snyk_scan:
+    needs: trigger_dev_staging_api # Ensures API trigger completes first
+    uses: ./.github/workflows/snyk-scan.yml # Calls the Snyk scan workflow

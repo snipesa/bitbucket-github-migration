@@ -1,0 +1,94 @@
+name: BETA-MASTER Pipeline
+
+on:
+  push:
+    branches:
+      - beta-master
+
+env:
+  PROD_API_GATEWAY_URL: ${{ secrets.PROD_API_GATEWAY_URL }}
+  PROD_API_KEY: ${{ secrets.PROD_API_KEY }}
+
+jobs:
+  trigger_staging_api:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          
+      - name: Set PR_ID
+        run: |
+          PR_ID=$(gh pr list --head ${{ github.ref_name }} --state merged --json number --jq '.[0].number')
+          echo "PR_ID=$PR_ID" >> $GITHUB_ENV
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Prepare Payload
+        run: |
+          PAYLOAD=$(cat << EOF
+          {
+            "source_repository": "${{ github.repository }}",
+            "destination_branch": "${{ github.ref_name }}",
+            "commit_hash": "${{ github.sha }}",
+            "trigger_type": "$([ ! -z "${PR_ID}" ] && echo "pull_request" || echo "push")",
+            "pr_id": "${PR_ID:-null}"
+          }
+          EOF
+          )
+          echo "PAYLOAD=$PAYLOAD" >> $GITHUB_ENV
+          echo "Sending payload: $PAYLOAD"
+      
+      - name: Trigger Staging API
+        run: |
+          # Send request to staging endpoint only
+          echo "Sending to staging endpoint: ${PROD_API_GATEWAY_URL}"
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${PROD_API_KEY}" \
+            -d "${{ env.PAYLOAD }}" \
+            "${PROD_API_GATEWAY_URL}/pr-merged"
+  
+  conditional_jira_update:
+    runs-on: ubuntu-latest
+    needs: trigger_staging_api
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          
+      - name: Get last commit message
+        id: get_commit_msg
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "COMMIT_MSG<<EOF" >> $GITHUB_ENV
+          echo "$COMMIT_MSG" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+      
+      - name: Check and trigger Jira update
+        run: |
+          if [[ "${{ env.COMMIT_MSG }}" == *"pull request"* ]] && [[ "${{ env.COMMIT_MSG }}" == *"${{ vars.JIRA_STAGING_SOURCE_BRANCH }}"* ]]; then
+            echo "Source branch is ${{ vars.JIRA_STAGING_SOURCE_BRANCH }}. Triggering Jira update..."
+            
+            # Prepare the payload
+            PAYLOAD=$(cat << EOF
+            {
+              "source_repository": "${{ github.repository }}",
+              "destination_branch": "${{ github.ref_name }}",
+              "commit_hash": "${{ github.sha }}"
+            }
+            EOF
+            )
+            
+            # Send the request to Jira update endpoint
+            echo "Sending to Jira update endpoint: ${PROD_API_GATEWAY_URL}/jira"
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -H "x-api-key: ${PROD_API_KEY}" \
+              -d "$PAYLOAD" \
+              "${PROD_API_GATEWAY_URL}/jira"
+          else
+            echo "Source branch is not ${{ vars.JIRA_STAGING_SOURCE_BRANCH }}. Skipping Jira update."
+          fi

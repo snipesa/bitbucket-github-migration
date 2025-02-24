@@ -1,0 +1,161 @@
+definitions:
+  steps:
+    - step: &trigger_dev_staging_api
+        name: Trigger Lambda via API Gateway
+        script:
+          - |
+            PAYLOAD=$(cat << EOF
+            {
+              "source_repository": "${BITBUCKET_REPO_FULL_NAME}",
+              "destination_branch": "${BITBUCKET_BRANCH}",
+              "commit_hash": "${BITBUCKET_COMMIT}",
+              "trigger_type": "$([ ! -z "${BITBUCKET_PR_ID}" ] && echo "pull_request" || echo "push")",
+              "pr_id": "${BITBUCKET_PR_ID:-null}"
+            }
+            EOF
+            )
+          - |
+            echo "Sending payload: $PAYLOAD"
+          - |
+            # Send request to DEV endpoint
+            echo "Sending to DEV endpoint: ${DEV_API_GATEWAY_URL}"
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -H "x-api-key: ${DEV_API_KEY}" \
+              -d "$PAYLOAD" \
+              "${DEV_API_GATEWAY_URL}/pr-merged"
+          - |
+            # Send request to PROD endpoint
+            echo "Sending to PROD endpoint: ${PROD_API_GATEWAY_URL}"
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -H "x-api-key: ${PROD_API_KEY}" \
+              -d "$PAYLOAD" \
+              "${PROD_API_GATEWAY_URL}/pr-merged"
+
+    - step: &trigger_staging_api
+        name: Trigger Lambda via API Gateway
+        script:
+          - |
+            PAYLOAD=$(cat << EOF
+            {
+              "source_repository": "${BITBUCKET_REPO_FULL_NAME}",
+              "destination_branch": "${BITBUCKET_BRANCH}",
+              "commit_hash": "${BITBUCKET_COMMIT}",
+              "trigger_type": "$([ ! -z "${BITBUCKET_PR_ID}" ] && echo "pull_request" || echo "push")",
+              "pr_id": "${BITBUCKET_PR_ID:-null}"
+            }
+            EOF
+            )
+          - |
+            # Print payload for debugging
+            echo "Sending payload: $PAYLOAD"
+          - |
+            # Send request to staging endpoint only
+            echo "Sending to staging endpoint: ${PROD_API_GATEWAY_URL}"
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -H "x-api-key: ${PROD_API_KEY}" \
+              -d "$PAYLOAD" \
+              "${PROD_API_GATEWAY_URL}/pr-merged"
+
+pipelines:
+  custom:
+    snyk-scan:
+      - step:
+          name: Snyk Security Scan
+          image: etunyiashime/snyk-scanner:latest #etu-eicatalyst
+          script:
+            - /entrypoint.sh
+          artifacts:
+            - snyk-results/**
+
+  branches:
+    dev-done:
+      - step: *trigger_dev_staging_api
+      - step:
+          name: Trigger Snyk Scan
+          script:
+            - >
+              curl -X POST "https://api.bitbucket.org/2.0/repositories/${BITBUCKET_WORKSPACE}/${BITBUCKET_REPO_SLUG}/pipelines/"
+              -u "${BITBUCKET_USERNAME}:${BITBUCKET_APP_PASSWORD}"
+              -H "Content-Type: application/json"
+              -d "{
+                \"target\": {
+                  \"type\": \"pipeline_ref_target\",
+                  \"ref_type\": \"branch\",
+                  \"ref_name\": \"${BITBUCKET_BRANCH}\",
+                  \"selector\": {
+                    \"type\": \"custom\",
+                    \"pattern\": \"snyk-scan\"
+                  }
+                }
+              }"
+
+    dev-master:
+      - step: *trigger_staging_api
+      - step:
+          name: Conditional Jira Update
+          script:
+            - |
+              # Get the last commit message
+              COMMIT_MSG=$(git log -1 --pretty=%B)
+            
+              if [[ $COMMIT_MSG == *"pull request"* ]] && [[ $COMMIT_MSG == *"${jira_dev_source_branch}"* ]]; then
+                echo "Source branch is ${jira_dev_source_branch}. Triggering Jira update..."
+              else
+                echo "Source branch is not ${jira_dev_source_branch}. Skipping Jira update."
+                exit 0
+              fi
+
+              # Prepare the payload
+              PAYLOAD=$(cat << EOF
+              {
+                "source_repository": "${BITBUCKET_REPO_FULL_NAME}",
+                "destination_branch": "${BITBUCKET_BRANCH}",
+                "commit_hash": "${BITBUCKET_COMMIT}"
+              }
+              EOF
+              )
+
+              # Send the request to Jira update endpoint
+              echo "Sending to Jira update endpoint: ${PROD_API_GATEWAY_URL}/jira"
+              curl -X POST \
+                -H "Content-Type: application/json" \
+                -H "x-api-key: ${PROD_API_KEY}" \
+                -d "$PAYLOAD" \
+                "${PROD_API_GATEWAY_URL}/jira"
+
+    beta-master:
+      - step: *trigger_staging_api
+      - step:
+          name: Conditional Jira Update
+          script:
+            - |
+              # Get the last commit message
+              COMMIT_MSG=$(git log -1 --pretty=%B)
+            
+              if [[ $COMMIT_MSG == *"pull request"* ]] && [[ $COMMIT_MSG == *"${jira_staging_source_branch}"* ]]; then
+                echo "Source branch is ${jira_staging_source_branch}. Triggering Jira update..."
+              else
+                echo "Source branch is not ${jira_staging_source_branch}. Skipping Jira update."
+                exit 0
+              fi
+
+              # Prepare the payload
+              PAYLOAD=$(cat << EOF
+              {
+                "source_repository": "${BITBUCKET_REPO_FULL_NAME}",
+                "destination_branch": "${BITBUCKET_BRANCH}",
+                "commit_hash": "${BITBUCKET_COMMIT}"
+              }
+              EOF
+              )
+
+              # Send the request to Jira update endpoint
+              echo "Sending to Jira update endpoint: ${PROD_API_GATEWAY_URL}/jira"
+              curl -X POST \
+                -H "Content-Type: application/json" \
+                -H "x-api-key: ${PROD_API_KEY}" \
+                -d "$PAYLOAD" \
+                "${PROD_API_GATEWAY_URL}/jira"
