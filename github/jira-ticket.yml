@@ -1,0 +1,70 @@
+name: Jira Update Workflow
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - dev-master
+      - beta-master
+
+env:
+  DEV_API_KEY: ${{ secrets.DEV_API_KEY }}
+  PROD_API_KEY: ${{ secrets.PROD_API_KEY }}
+  DEV_API_GATEWAY_URL: ${{ vars.DEV_API_GATEWAY_URL }}
+  PROD_API_GATEWAY_URL: ${{ vars.PROD_API_GATEWAY_URL }}
+  JIRA_DEV_SOURCE_BRANCH: dev-done
+  JIRA_STAGING_SOURCE_BRANCH: dev-master
+
+jobs:
+  jira_update:
+    # Only run if the PR was merged (not just closed)
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history to check commit message
+
+
+      - name: Check source branch and update Jira
+        env:
+          # Get source branch name from the pull request
+          SOURCE_BRANCH: "${{ github.event.pull_request.head.ref }}"
+          TARGET_BRANCH: "${{ github.base_ref }}"
+        
+        run: |
+          echo "Source branch: $SOURCE_BRANCH"
+          echo "Target branch: $TARGET_BRANCH"
+
+          # Determine the expected source branch based on target branch
+          EXPECTED_SOURCE_BRANCH=""
+          if [[ "$TARGET_BRANCH" == "dev-master" ]]; then
+            EXPECTED_SOURCE_BRANCH="${JIRA_DEV_SOURCE_BRANCH}"
+          elif [[ "$TARGET_BRANCH" == "beta-master" ]]; then
+            EXPECTED_SOURCE_BRANCH="${JIRA_STAGING_SOURCE_BRANCH}"
+          else
+            echo "Unsupported target branch: $TARGET_BRANCH. Exiting."
+            exit 1            
+          fi
+          
+          # Check if the source branch matches the expected branch
+          if [[ "$SOURCE_BRANCH" == "$EXPECTED_SOURCE_BRANCH" ]]; then
+            echo "Source branch is $EXPECTED_SOURCE_BRANCH. Triggering Jira update..."
+          else
+            echo "Source branch $SOURCE_BRANCH does not match expected branch $EXPECTED_SOURCE_BRANCH. Skipping Jira update."
+            exit 0
+          fi
+          
+          # Create the JSON payload for Jira update
+          PAYLOAD="{\"source_repository\":\"${{ github.repository }}\",\"destination_branch\":\"$TARGET_BRANCH\",\"commit_hash\":\"${{ github.sha }}\",\"pr_id\":${{ github.event.pull_request.number }}}"
+          echo "Payload : $PAYLOAD"
+          
+          # Send the request to Jira update endpoint
+          echo "Sending to Jira update endpoint: ${{ env.PROD_API_GATEWAY_URL }}/jira"
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${{ env.PROD_API_KEY }}" \
+            -d "$PAYLOAD" \
+            "${{ env.PROD_API_GATEWAY_URL }}/jira"

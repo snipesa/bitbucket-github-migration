@@ -1,21 +1,29 @@
-# .github/workflows/snyk-scan.yml
 name: Snyk Security Scan
 on:
-  workflow_call: # This allows the workflow to be called from another workflow
+  workflow_call:
+    secrets:
+      SNYK_AUTH_TOKEN:
+        required: true  
+
 jobs:
   snyk_scan:
     runs-on: ubuntu-latest
     container:
-      image: etunyiashime/snyk-scanner:latest
+      image: etunyiashime/snyk-github-scanner:latest 
+      # previous docker container used with bitbucket 
+      # image: etunyiashime/snyk-scanner:latest     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Run Snyk Scan with Custom EntryPoint
+        
+      - name: Run Snyk Scan
         run: /entrypoint.sh
         env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_AUTH_TOKEN: ${{ secrets.SNYK_AUTH_TOKEN }}
+          
       - name: Upload Snyk results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: snyk-results
           path: snyk-results/
+          
