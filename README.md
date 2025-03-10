@@ -67,7 +67,7 @@ Triggered when code is pushed to the `dev-master` branch:
 - Performs conditional Jira updates based on commit messages and source branch
 
 #### `beta-master.yml`
-Triggered when code is pushed to the `master-prod` branch:
+Triggered when code is pushed to the `beta-master` branch:
 - Sends notifications only to the PROD/staging API Gateway endpoint
 - Performs conditional Jira updates using a different source branch variable
 

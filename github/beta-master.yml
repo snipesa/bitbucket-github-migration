@@ -3,7 +3,7 @@ name: beta-master Pipeline
 on:
   push:
     branches:
-      - master-prod
+      - beta-master
 
     # paths:
     #   - 'app-code/**'
